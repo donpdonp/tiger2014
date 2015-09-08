@@ -2,8 +2,8 @@
 
 download, unpack, convert, and upload TIGER city data into RethinkDB.
 
-From Sep 2015, TIGER City count is 29829 with about 2,900 cities dropped due to a polygon or name import error.
-The properties.state is generated locally from a FIPS state catalog. The Slug is generated for a url-safe version of the name.
+From Sep 2015, TIGER City count is 29,829 with about 2,900 cities dropped due to a polygon or name import error.
+properties.state is generated locally from a FIPS state catalog. The slug is generated for a url-safe version of the name.
 
 ```json
 {
