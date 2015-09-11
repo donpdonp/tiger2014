@@ -5,6 +5,7 @@ require 'json'
 include RethinkDB::Shortcuts
 
 STATES = JSON.parse(File.read('FIPS.json'))
+CENSUS = {}
 
 def flip(pts)
   pts.map {|c| [c[1], c[0]] }
@@ -25,6 +26,15 @@ def slugify(props)
   parts.join('-').downcase
 end
 
+def census_scan
+  puts "Loading Census GEOIP Populations"
+  File.readlines('../../Place_2010Census/Place_2010Census.json').each do |line|
+    match = line.match(/"GEOID10": "(\d+)".*"DP0010001": (\d+)/)
+    CENSUS[match.captures[0]] = match.captures[1].to_i if match
+  end
+  puts "#{CENSUS.keys.size} Place Populations loaded"
+end
+
 def geoify(geo)
   geo.map do |g|
     coords = g['geometry']['coordinates']
@@ -32,9 +42,10 @@ def geoify(geo)
     puts "#{g['properties']['NAME']} polys #{coords.size}"
     primary_points = coords.shift
     unless sane?(primary_points)
-      puts "WARNING: Dropping city."
+      puts " Warning: Dropping city."
       next
     end
+
     #puts "primary sample #{primary_points[0].inspect}"
     primary = r.polygon(*primary_points)
 
@@ -47,37 +58,46 @@ def geoify(geo)
 
     washed =  g['properties']
     washed['STATE'] = fips_state(washed["STATEFP"])
+    pop = CENSUS[washed["GEOID"]]
+    washed['POPULATION'] = pop if pop
+
     {polygon: primary,
      properties: washed,
      slug: slugify(washed)}
   end.compact
 end
 
-puts "rethink connecting"
-dbname = 'tiger'
-conn = r.connect
-r.db_create(dbname).run(conn) unless r.db_list().run(conn).include?(dbname)
-conn.use(dbname)
-r.table_create('cities').run(conn) rescue RethinkDB::RqlRuntimeError
-r.table('cities').index_create('polygon', :geo => true).run(conn) rescue RethinkDB::RqlRuntimeError
-r.table('cities').index_create('slug').run(conn) rescue RethinkDB::RqlRuntimeError
-puts "rethink #{dbname} indexes #{r.table('cities').index_list.run(conn)}"
-puts "rethink emptying #{dbname}"
-r.table('cities').delete.run(conn)
+def db
+  puts "rethinkdb connecting"
+  dbname = 'tiger'
+  table_name = 'cities'
 
+  conn = r.connect
+  r.db_create(dbname).run(conn) unless r.db_list().run(conn).include?(dbname)
+  conn.use(dbname)
+  r.table_drop(table_name).run(conn) if r.table_list().run(conn).include?(table_name)
+  r.table_create(table_name).run(conn) rescue RethinkDB::RqlRuntimeError
+  r.table(table_name).index_create('polygon', {:multi => true, :geo => true}).run(conn) rescue RethinkDB::RqlRuntimeError
+  r.table(table_name).index_create('slug').run(conn) rescue RethinkDB::RqlRuntimeError
+  puts "rethink #{dbname} indexes #{r.table(table_name).index_list.run(conn)}"
+  conn
+end
 
+conn = db
 total_tiger = 0
 total_records = 0
 total_saved = 0
 
+census_scan
 ARGV.each do |fname|
+  puts "Parsing #{fname}"
   tiger = JSON.parse(File.read(fname))['features']
   records = geoify(tiger)
   puts "#{fname}: Inserting #{records.size} records"
   saved = 0
   records.each do |record|
     begin
-      puts "saving #{record[:slug]} #{record[:properties]['NAME']} "
+      puts "saving #{record[:slug]} #{record[:properties]['NAME']} POP: #{record[:properties]['POPULATION']}"
       r.table('cities').insert(record).run(conn)
       saved += 1
     rescue JSON::GeneratorError => e
