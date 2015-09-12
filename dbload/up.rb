@@ -37,23 +37,15 @@ end
 
 def geoify(geo)
   geo.map do |g|
-    coords = g['geometry']['coordinates']
+    geom = g['geometry']
 
-    puts "#{g['properties']['NAME']} polys #{coords.size}"
-    primary_points = coords.shift
-    unless sane?(primary_points)
-      puts " Warning: Dropping city."
-      next
-    end
+    puts "#{g['properties']['NAME']} #{geom['type']} polys #{geom['coordinates'].size}"
 
-    #puts "primary sample #{primary_points[0].inspect}"
-    primary = r.polygon(*primary_points)
-
-    coords.each do |co|
-      pts = co
-      #puts "hole sample #{pts[0].inspect}"
-      hole = r.polygon(*pts)
-      primary.polygon_sub(hole)
+    case geom['type']
+    when "Polygon"
+      outline = [r.geojson(geom)]
+    when "MultiPolygon"
+      outline = geom['coordinates'].map{|c| r.geojson({type:"Polygon", coordinates: c})}
     end
 
     washed =  g['properties']
@@ -61,7 +53,7 @@ def geoify(geo)
     pop = CENSUS[washed["GEOID"]]
     washed['POPULATION'] = pop if pop
 
-    {polygon: primary,
+    {outline: outline,
      properties: washed,
      slug: slugify(washed)}
   end.compact
@@ -77,7 +69,7 @@ def db
   conn.use(dbname)
   r.table_drop(table_name).run(conn) if r.table_list().run(conn).include?(table_name)
   r.table_create(table_name).run(conn) rescue RethinkDB::RqlRuntimeError
-  r.table(table_name).index_create('polygon', {:multi => true, :geo => true}).run(conn) rescue RethinkDB::RqlRuntimeError
+  r.table(table_name).index_create('outline', {:multi => true, :geo => true}).run(conn) rescue RethinkDB::RqlRuntimeError
   r.table(table_name).index_create('slug').run(conn) rescue RethinkDB::RqlRuntimeError
   puts "rethink #{dbname} indexes #{r.table(table_name).index_list.run(conn)}"
   conn
